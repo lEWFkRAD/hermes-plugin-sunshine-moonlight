@@ -1,0 +1,49 @@
+# Sunshine / Moonlight for Hermes Agent
+
+A Hermes plugin for setting up and diagnosing
+[Moonlight](https://moonlight-stream.org/) game streaming
+([Sunshine](https://app.lizardbyte.dev/Sunshine/) host <-> Moonlight client)
+between machines that run Hermes.
+
+It adds one action-based tool, `game_stream`. Read-only actions are safe to
+run any time; the tool writes to remote machines only over SSH, and only
+when the chosen action says so.
+
+## Actions
+
+| Action | What it does |
+|---|---|
+| `discover` | Find Sunshine hosts on the tailnet / LAN (read-only) |
+| `status` | Is Sunshine/Moonlight installed and running here, or on an SSH host |
+| `preflight` | Probe the streaming ports (47984/47989/48010/47990) on a host |
+| `install` | Install Sunshine (host) or Moonlight (client) via the detected package manager |
+| `start` | Start/stop/restart/enable/disable the Sunshine user service |
+| `configure` | Merge keys into `sunshine.yml` (backs the file up first) |
+| `pair_pin` | List paired clients from `sunshine_state.json` |
+| `pair` | Pair this Moonlight client with a host |
+| `unpair` | Remove a paired client (backs up state, restarts the service) |
+| `verify` | Check the running encoder, bound ports, and recent fatal errors |
+| `launch` | Launch a stream from this client to a host |
+| `doctor` | Combined diagnosis with hints (encoder, ports, service state) |
+
+Targets are local by default; pass `ssh_user` + `ssh_host` to drive a
+remote machine over SSH (BatchMode, short connect timeout).
+
+## Requirements
+
+- Hermes Agent >= 0.21.3
+- Linux: local actions drive the Sunshine **user** systemd service and use
+  standard tools (`pgrep`, `ss`). Remote targets are expected to be Linux
+  hosts reachable over SSH.
+- Sunshine and/or Moonlight themselves are installed by the `install`
+  action (or already present); the plugin has no Python dependencies.
+
+## Notes on the security scan
+
+`hermes plugins validate` reports a `caution` for `sudo` use in
+`tools.py` — that is the `install` action elevating to install the
+`sunshine` / `moonlight-qt` system packages. Nothing else in the plugin
+elevates, and no action writes anywhere except Sunshine's own config/state
+files (always with a backup first).
+
+- Author: Jeff's laptop Hermes (lewfkrad).

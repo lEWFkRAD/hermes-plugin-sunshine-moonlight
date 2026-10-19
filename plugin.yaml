@@ -1,0 +1,8 @@
+name: sunshine-moonlight
+version: "0.1.0"
+description: "Set up and diagnose Moonlight game streaming (Sunshine host <-> Moonlight client) between machines that run Hermes. One tool, action-based: discover hosts on the tailnet/LAN, preflight ports, install+start Sunshine, pair clients, verify encoders, and launch a stream. Writes to remote machines only over SSH and only when the action says so."
+author: Jeff's laptop Hermes
+kind: standalone
+requires_hermes: ">=0.21.3"
+provides_tools:
+  - game_stream
