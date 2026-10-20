@@ -10,19 +10,93 @@ Design rules baked in (each learned from a real onyx/laptop deployment):
 - Never start sunshine twice: check pgrep + port binds before starting.
 """
 
+import base64
+import ipaddress
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
 import time
+from pathlib import Path
 
 STREAM_PORTS = [47984, 47989, 48010]
 WEBUI_PORT = 47990
 SUNSHINE_CONFIG = os.path.expanduser("~/.config/sunshine/sunshine.yml")
 SUNSHINE_STATE = os.path.expanduser("~/.config/sunshine/sunshine_state.json")
 SUNSHINE_LOG = os.path.expanduser("~/.config/sunshine/sunshine.log")
+
+
+# Only scalar display/encoder options may be changed through this tool.
+CONFIG_CHOICES = {
+    "encoder": {"nvenc", "vaapi", "software", "amdvce", "quicksync", "videotoolbox"},
+    "address_family": {"ipv4", "both"},
+    "upnp": {"enabled", "disabled"},
+    "hevc_mode": {"0", "1", "2", "3"},
+    "av1_mode": {"0", "1", "2", "3"},
+}
+
+
+def _validate_host(value):
+    if not isinstance(value, str) or not value or value.startswith("-"):
+        raise ValueError("host must be a hostname or IP address")
+    try:
+        ipaddress.ip_address(value)
+        if "%" in value:
+            raise ValueError("scoped addresses are not supported")
+        return
+    except ValueError:
+        pass
+    if len(value) > 253 or not re.fullmatch(
+        r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", value
+    ):
+        raise ValueError("host must be a hostname or IP address")
+
+
+def _validate_ssh(user, host):
+    if not isinstance(user, str) or not re.fullmatch(r"[a-z_][a-z0-9_.-]*", user):
+        raise ValueError("invalid ssh_user")
+    _validate_host(host)
+
+
+def _validate_settings(settings):
+    if not isinstance(settings, dict) or not settings:
+        raise ValueError("configure needs settings={...}")
+    for key, value in settings.items():
+        if key not in CONFIG_CHOICES or type(value) not in (str, int):
+            raise ValueError("unsupported configure key or value: %s" % key)
+        if str(value) not in CONFIG_CHOICES[key]:
+            raise ValueError("unsupported value for %s" % key)
+
+
+def _validate_args(args):
+    if ("ssh_user" in args) != ("ssh_host" in args):
+        raise ValueError("ssh_user and ssh_host must be supplied together")
+    if "ssh_user" in args:
+        _validate_ssh(args["ssh_user"], args["ssh_host"])
+    if "host" in args:
+        _validate_host(args["host"])
+    if "resolution" in args and (
+        not isinstance(args["resolution"], str)
+        or not re.fullmatch(r"[0-9]+x[0-9]+(@[0-9]+)?", args["resolution"])
+    ):
+        raise ValueError("resolution must be WIDTHxHEIGHT or WIDTHxHEIGHT@HZ")
+    if "role" in args and args["role"] not in ("host", "client"):
+        raise ValueError("role must be host or client")
+    if "client_name" in args and (
+        not isinstance(args["client_name"], str) or
+        any(ord(c) < 32 or ord(c) == 127 for c in args["client_name"])
+    ):
+        raise ValueError("invalid client_name")
+    if "apps" in args and (not isinstance(args["apps"], list) or
+                           any(not isinstance(a, str) or a.startswith("-") or
+                               any(ord(c) < 32 or ord(c) == 127 for c in a)
+                               for a in args["apps"])):
+        raise ValueError("apps must contain application names, not options")
+    if args.get("action") == "configure":
+        _validate_settings(args.get("settings"))
 
 
 # ---------------------------------------------------------------- plumbing --
@@ -41,11 +115,12 @@ def _run(cmd, timeout=30):
 
 def _ssh(ssh_user, ssh_host, remote_cmd, timeout=30):
     """Run a command on a remote host over SSH (BatchMode; no password prompts)."""
+    _validate_ssh(ssh_user, ssh_host)
     target = "%s@%s" % (ssh_user, ssh_host)
     # Pass the command as ONE argv element to ssh; ssh concatenates argv and the
     # remote shell re-parses it, so shell operators (||, ;, |) survive.
     return _run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
-                 target, remote_cmd], timeout=timeout)
+                 "--", target, remote_cmd], timeout=timeout)
 
 
 def _host_run(args, remote_cmd, local_cmd, timeout=30):
@@ -100,7 +175,7 @@ def _sunshine_running():
 
 def _encoder_reality():
     """Last 'Found ... encoder' line from the sunshine log."""
-    rc, out = _run("grep -aE 'Found .*encoder' %s 2>/dev/null | tail -1" % SUNSHINE_LOG)
+    rc, out = _run("grep -aE 'Found .*encoder' %s 2>/dev/null | tail -1" % shlex.quote(SUNSHINE_LOG))
     return out.strip() or "no encoder line in log"
 
 
@@ -207,6 +282,8 @@ def act_start(args):
     uid_cmd = "id -u"
     rc, uid = _host_run(args, uid_cmd, uid_cmd)
     uid = (uid or "").strip() or "1000"
+    if not re.fullmatch(r"[0-9]+", uid):
+        return _fail({"error": "could not determine target uid"})
     env = "XDG_RUNTIME_DIR=/run/user/%s DISPLAY=${DISPLAY:-:0}" % uid
     svc = "systemctl --user %s sunshine" % state
     rc, out = _host_run(args, "%s %s" % (env, svc), svc, timeout=30)
@@ -223,10 +300,11 @@ def act_start(args):
 def act_configure(args):
     """Merge keys into sunshine.yml (YAML), back it up first."""
     settings = args.get("settings") or {}
+    _validate_settings(settings)
     if not settings:
         return _fail({"error": "configure needs settings={...}"})
-    rc, existing = _host_run(args, "cat %s 2>/dev/null || true" % SUNSHINE_CONFIG,
-                             "cat %s 2>/dev/null || true" % SUNSHINE_CONFIG)
+    rc, existing = _host_run(args, 'cat "$HOME/.config/sunshine/sunshine.yml" 2>/dev/null || true',
+                             "cat %s 2>/dev/null || true" % shlex.quote(SUNSHINE_CONFIG))
     lines = {}
     for line in (existing or "").splitlines():
         m = re.match(r"^([a-zA-Z0-9_]+):\s*(.*)$", line.strip())
@@ -238,8 +316,9 @@ def act_configure(args):
     b64 = __import__("base64").b64encode(body.encode()).decode()
     write = ("mkdir -p ~/.config/sunshine && cp -n %s %s.bak-preplugin 2>/dev/null; "
              "printf %%s '%s' | base64 -d > %s && echo WROTE"
-             % (SUNSHINE_CONFIG, SUNSHINE_CONFIG, b64, SUNSHINE_CONFIG))
-    rc, out = _host_run(args, write, write)
+             % (shlex.quote(SUNSHINE_CONFIG), shlex.quote(SUNSHINE_CONFIG), b64, shlex.quote(SUNSHINE_CONFIG)))
+    remote_write = write.replace(shlex.quote(SUNSHINE_CONFIG), '"$HOME/.config/sunshine/sunshine.yml"')
+    rc, out = _host_run(args, remote_write, write)
     return _ok({"action": "configure", "written": settings, "output": out.strip(),
                 "backup": SUNSHINE_CONFIG + ".bak-preplugin",
                 "note": "restart the service (action=start state=restart) to apply."})
@@ -247,8 +326,8 @@ def act_configure(args):
 
 def act_pair_pin(args):
     """List paired clients from sunshine_state.json (PIN entry is interactive on host)."""
-    rc, out = _host_run(args, "cat %s 2>/dev/null || echo NO-STATE" % SUNSHINE_STATE,
-                        "cat %s 2>/dev/null || echo NO-STATE" % SUNSHINE_STATE)
+    rc, out = _host_run(args, 'cat "$HOME/.config/sunshine/sunshine_state.json" 2>/dev/null || echo NO-STATE',
+                        "cat %s 2>/dev/null || echo NO-STATE" % shlex.quote(SUNSHINE_STATE))
     clients = []
     try:
         state = json.loads(out)
@@ -288,16 +367,19 @@ def act_unpair(args):
     name = args.get("client_name")
     if not name:
         return _fail({"error": "unpair needs client_name=<paired client>"})
-    rc, out = _host_run(args,
-                        "python3 - <<'PY'\n"
-                        "import json,os\n"
-                        "p=os.path.expanduser('%s')\n"
-                        "d=json.load(open(p))\n"
-                        "cl=d.get('clients',{})\n"
-                        "hit=[k for k,v in (cl.items() if isinstance(cl,dict) else enumerate(cl)) if (v.get('name') if isinstance(v,dict) else v)=='%s']\n"
-                        "print('NOT-FOUND' if not hit else 'FOUND:'+','.join(map(str,hit)))\n"
-                        "PY" % (SUNSHINE_STATE, name.replace("'", "")),
-                        "echo LOCAL-UNPAIR-MANUAL")
+    encoded = base64.b64encode(name.encode("utf-8")).decode("ascii")
+    script = (
+        "import base64,json,os,sys\n"
+        "name=base64.b64decode(sys.argv[1]).decode('utf-8')\n"
+        "p=os.path.expanduser('~/.config/sunshine/sunshine_state.json')\n"
+        "with open(p, encoding='utf-8') as f: d=json.load(f)\n"
+        "cl=d.get('clients',{})\n"
+        "hit=[k for k,v in (cl.items() if isinstance(cl,dict) else enumerate(cl)) "
+        "if (v.get('name') if isinstance(v,dict) else v)==name]\n"
+        "print('NOT-FOUND' if not hit else 'FOUND:'+','.join(map(str,hit)))"
+    )
+    command = "python3 -c %s %s" % (shlex.quote(script), shlex.quote(encoded))
+    rc, out = _host_run(args, command, command)
     return _ok({"action": "unpair", "probe": out.strip(),
                 "note": "if FOUND, remove via the Sunshine web UI Clients tab, or ask and "
                         "I'll edit sunshine_state.json with a backup + service restart."})
@@ -343,20 +425,27 @@ def act_launch(args):
                       "hint": "action=install role=client"})
     # Harvest the live desktop session env (agent terminals lack it).
     rc, pids = _run("pgrep -u $(id -u) -x Hyprland | head -1")
-    env_bits = ""
-    if pids.strip():
-        rc, envraw = _run("tr '\\0' '\\n' < /proc/%s/environ 2>/dev/null | "
-                          "grep -E '^(WAYLAND_DISPLAY|XDG_RUNTIME_DIR|HYPRLAND_INSTANCE_SIGNATURE|DISPLAY|DBUS_SESSION_BUS_ADDRESS)='" % pids.strip())
-        env_bits = " ".join(l.split("=", 1)[0] + "='" + l.split("=", 1)[1] + "'"
-                            for l in envraw.splitlines() if "=" in l)
-    # moonlight CLI grammar: `moonlight stream [-res WxH@Hz] <host> [app]`.
-    # Bare `moonlight <host>` is an Invalid action and exits 1.
+    session_env = {}
+    pid = pids.strip()
+    if re.fullmatch(r"[0-9]+", pid):
+        try:
+            envraw = Path("/proc") / pid / "environ"
+            allowed = {"WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "HYPRLAND_INSTANCE_SIGNATURE",
+                       "DISPLAY", "DBUS_SESSION_BUS_ADDRESS"}
+            for entry in envraw.read_bytes().split(b"\0"):
+                key, sep, value = entry.partition(b"=")
+                key = os.fsdecode(key)
+                if sep and key in allowed:
+                    session_env[key] = os.fsdecode(value)
+        except OSError:
+            pass
     res = args.get("resolution")
-    res_opt = ("-res %s " % res.replace("@", "x").replace("x", "x")) if res else ""
     app = (args.get("apps") or [""])[0]
-    cmd = "%s moonlight stream %s%s%s" % (env_bits, res_opt, host, (" " + app) if app else "")
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.PIPE, start_new_session=True)
+    cmd = ["moonlight", "stream", *(["-res", res] if res else []),
+           host, *([app] if app else [])]
+    p = subprocess.Popen(cmd, env={**os.environ, **session_env},
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                         start_new_session=True)
     time.sleep(4)
     alive = p.poll() is None
     err = ""
@@ -419,6 +508,7 @@ def game_stream_handler(params, **kwargs):
     if fn is None:
         return _fail({"error": "unknown action %r" % action, "known": sorted(ACTIONS)})
     try:
+        _validate_args(params)
         return fn(params)
     except Exception as e:  # noqa: BLE001
         return _fail({"error": "%s: %s" % (type(e).__name__, e), "action": action})

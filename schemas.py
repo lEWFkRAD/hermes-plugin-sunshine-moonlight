@@ -45,6 +45,8 @@ GAME_STREAM_SCHEMA = {
                 "type": "string",
                 "description": "SSH target if different from host (e.g. onyx-linux).",
             },
+            "role": {"type": "string", "enum": ["host", "client"], "default": "host",
+                     "description": "For install: Sunshine host or Moonlight client (local installation)."},
             "state": {
                 "type": "string",
                 "enum": ["start", "stop", "enable", "disable", "restart"],
@@ -52,7 +54,7 @@ GAME_STREAM_SCHEMA = {
             },
             "settings": {
                 "type": "object",
-                "description": "For action=configure: sunshine.yml keys, e.g. {\"encoder\": \"nvenc\", \"address_family\": \"both\", \"upnp\": \"disabled\", \"hevc_mode\": 0}.",
+                "description": "For action=configure: only encoder, address_family, upnp, hevc_mode, av1_mode; e.g. {\"encoder\": \"nvenc\", \"address_family\": \"both\", \"upnp\": \"disabled\", \"hevc_mode\": 0}.",
             },
             "client_name": {
                 "type": "string",

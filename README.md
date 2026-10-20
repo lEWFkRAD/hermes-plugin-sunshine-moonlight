@@ -21,7 +21,7 @@ when the chosen action says so.
 | `configure` | Merge keys into `sunshine.yml` (backs the file up first) |
 | `pair_pin` | List paired clients from `sunshine_state.json` |
 | `pair` | Pair this Moonlight client with a host |
-| `unpair` | Remove a paired client (backs up state, restarts the service) |
+| `unpair` | Look up a paired client and return manual removal instructions |
 | `verify` | Check the running encoder, bound ports, and recent fatal errors |
 | `launch` | Launch a stream from this client to a host |
 | `doctor` | Combined diagnosis with hints (encoder, ports, service state) |
@@ -47,3 +47,14 @@ elevates, and no action writes anywhere except Sunshine's own config/state
 files (always with a backup first).
 
 - Author: Jeff's laptop Hermes (lewfkrad).
+
+## Input boundaries
+
+SSH usernames and targets are validated before any action; supply both or neither.
+Moonlight runs with an argument list and a separate environment, without shell
+parsing. Resolution accepts WIDTHxHEIGHT or WIDTHxHEIGHT@HZ. Installation is local.
+Configuration accepts only encoder, address_family, upnp, hevc_mode and av1_mode,
+with bounded scalar choices. Command hooks, app paths and arbitrary YAML are refused.
+Unpair only looks up a name; it does not remove clients or restart services.
+
+Regression checks: python -m unittest discover -s tests -v (no live hosts needed).
