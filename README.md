@@ -1,4 +1,6 @@
 <!-- project-home:start -->
+![hermes-plugin-sunshine-moonlight project banner](https://raw.githubusercontent.com/lEWFkRAD/hermes-plugin-sunshine-moonlight/46554af075ffbd2919f3b30326ef774a8bd489d2/docs/banner.jpg)
+
 **[Sunshine / Moonlight for Hermes project homepage](https://lewfkrad.github.io/hermes-plugin-sunshine-moonlight/)** · [Documentation](https://github.com/lEWFkRAD/hermes-plugin-sunshine-moonlight#actions)
 
 Set up and diagnose Sunshine-to-Moonlight game streaming from Hermes.
