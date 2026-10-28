@@ -1,3 +1,10 @@
+<!-- project-home:start -->
+**[Sunshine / Moonlight for Hermes project homepage](https://lewfkrad.github.io/hermes-plugin-sunshine-moonlight/)** · [Documentation](https://github.com/lEWFkRAD/hermes-plugin-sunshine-moonlight#actions)
+
+Set up and diagnose Sunshine-to-Moonlight game streaming from Hermes.
+
+<!-- project-home:end -->
+
 # Sunshine / Moonlight for Hermes Agent
 
 A Hermes plugin for setting up and diagnosing
